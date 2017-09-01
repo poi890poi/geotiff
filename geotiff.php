@@ -150,25 +150,29 @@ class SplFixedRaster extends SplFixedArray {
         return $this->mBitmap[ $y * $this->mWidth + $x ];        
     }
     
-    public function trim( $size ) {
+    public function trim( &$size ) {
+        // $size = array( left, top, right, bottom )
         $dst = 0;
-        $src = $size * ($this->mWidth+1);
-        $this->mWidth = $this->mWidth - $size*2;
-        $this->mHeight = $this->mHeight - $size*2;
+        $src = $size[0] + $size[1] * $this->mWidth;
+        $this->mWidth = $this->mWidth - $size[0] - $size[2];
+        $this->mHeight = $this->mHeight - $size[1] - $size[3];
         $this->mLength = $this->mWidth * $this->mHeight;
-        if ( $GLOBALS['dev'] ) echo 'trim, bitmap: '.$this->mBitmap->getSize().', mem: '.memory_get_usage().PHP_EOL;
+        if ( $GLOBALS['dev'] ) {
+            print_r( $size ).PHP_EOL;
+            echo 'trim, bitmap: '.$this->mBitmap->getSize().', mem: '.memory_get_usage().PHP_EOL;
+        }
         for ( $y=0; $y<$this->mHeight; $y++ ) {
             for ( $x=0; $x<$this->mWidth; $x++ ) {
                 $this->mBitmap[$dst] = $this->mBitmap[$src];
                 $dst++;
                 $src++;
             }
-            $src += $size*2;
+            $src += $size[0] + $size[2];
         }
         $this->mBitmap->setSize( $this->mLength );
         if ( $GLOBALS['dev'] ) echo 'trim, bitmap: '.$this->mBitmap->getSize().', mem: '.memory_get_usage().PHP_EOL;
-        $this->mTiepoint[0] += $this->mPixelScale[0] * $size;
-        $this->mTiepoint[1] += $this->mPixelScale[1] * $size;
+        $this->mTiepoint[0] += $this->mPixelScale[0] * $size[0];
+        $this->mTiepoint[1] += $this->mPixelScale[1] * $size[1];
     }
     
     public function normalize( &$stats, $type = 'dynamic', $min = -500, $max = 500 ) {
@@ -267,6 +271,7 @@ class ImageFileDirectory {
     public $TileIndex; /* index of active tile in this IFD */
     public $TileX; /* X of active tile in this IFD */
     public $TileY; /* Y of active tile in this IFD */
+    public $TileCount;
     public $PixelPointer; /* current pixel offset */
     
     public $GeographicTypeGeoKey; /* This key may be used to specify the code for the geographic coordinate system used to map lat-long to a specific ellipsoid over the earth. */
@@ -428,7 +433,7 @@ class ImageFileDirectory {
 
     public function nextTile() {
         $this->TileIndex++;
-        if ( $this->TileIndex >= $this->TileRowNum * $this->TileColumnNum ) {
+        if ( $this->TileIndex >= $this->TileCount ) {
             return 0;
         }
         $this->TileX++;
@@ -454,7 +459,7 @@ class ImageFileDirectory {
             return 0;
         }
 
-        if ( $this->TileIndex < 0 || $this->TileIndex >= $this->TileRowNum * $this->TileColumnNum ) {
+        if ( $this->TileIndex < 0 || $this->TileIndex >= $this->TileCount ) {
             echo 'Coordinate ('.$point->lon.', '.$point->lat.') out of range'.PHP_EOL;
             return 0;
         }
@@ -489,74 +494,127 @@ class ImageFileDirectory {
             
             $now = microtime(true) * 1000;
             
-            $expand = 8; /* expand for convolution */
-            $bitmap = new SplFixedRaster( $this->TileWidth + $expand * 2, $this->TileLength + $expand * 2 );
+            $expand = 0; /* expand for convolution */
+            $padding = array( $expand, $expand, $expand, $expand );
+            if ( $this->TileX===0 ) {
+                $tp_shift_x = 0;
+                $padding[0] = 0;
+            } else {
+                $tp_shift_x = -$expand*$this->ModelPixelScaleTag[0];
+                if ( $this->TileX===$this->TileColumnNum ) {
+                    $padding[2] = 0;
+                }
+            }
+            if ( $this->TileY===0 ) {
+                $tp_shift_y = 0;
+                $padding[1] = 0;
+            } else {
+                $tp_shift_y = -$expand*$this->ModelPixelScaleTag[1];
+                if ( $this->TileY===$this->TileRowNum ) {
+                    $padding[3] = 0;
+                }
+            }
+            $bitmap = new SplFixedRaster( $this->TileWidth + $padding[0] + $padding[2],
+                $this->TileLength + $padding[1] + $padding[3] );
+
             $bitmap->setRange(
-                $this->ModelTiepointTag[3] + $this->TileX*$this->TileWidth*$this->ModelPixelScaleTag[0] - $expand*$this->ModelPixelScaleTag[0],
-                $this->ModelTiepointTag[4] + $this->TileY*$this->TileLength*$this->ModelPixelScaleTag[1] - $expand*$this->ModelPixelScaleTag[1],
+                $this->ModelTiepointTag[3] + $this->TileX*$this->TileWidth*$this->ModelPixelScaleTag[0] + $tp_shift_x,
+                $this->ModelTiepointTag[4] + $this->TileY*$this->TileLength*$this->ModelPixelScaleTag[1] + $tp_shift_y,
                 $this->ModelPixelScaleTag[0],
                 $this->ModelPixelScaleTag[1]
             );
+            
             if ( $GLOBALS['dev'] ) echo 'pixels: '.$bitmap->getSize().', mem: '.memory_get_usage().PHP_EOL;
             
             $buffer = '';
 
-            $t0 = $this->TileIndex - $this->TileColumnNum - 1;
-            $t1 = $t0 + 1;
-            $t2 = $t0 + 2;
-            $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$expand)*$this->BytesPerSample + ($this->TileLength-$expand)*$this->TileWidth*$this->BytesPerSample;
-            $o1 = $this->TagList[324][$t1] + ($this->TileLength-$expand)*$this->TileWidth*$this->BytesPerSample;
-            $o2 = $this->TagList[324][$t2] + ($this->TileLength-$expand)*$this->TileWidth*$this->BytesPerSample;
-            for ( $i=0; $i<$expand; $i++ ) {
-                fseek( $this->mGeoTIFF->hFile, $o0 );
-                $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
-                fseek( $this->mGeoTIFF->hFile, $o1 );
-                $buffer .= fread( $this->mGeoTIFF->hFile, $this->TileWidth * $this->BytesPerSample );
-                fseek( $this->mGeoTIFF->hFile, $o2 );
-                $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
-                $o0 += $this->TileWidth * $this->BytesPerSample;
-                $o1 += $this->TileWidth * $this->BytesPerSample;
-                $o2 += $this->TileWidth * $this->BytesPerSample;
+            if ( $padding[1] ) {
+                $t0 = $this->TileIndex - $this->TileColumnNum - 1;
+                $t1 = $t0 + 1;
+                $t2 = $t0 + 2;
+                unset( $o0 );
+                unset( $o1 );
+                unset( $o2 );
+                if ( $padding[0] ) $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$expand)*$this->BytesPerSample + ($this->TileLength-$expand)*$this->TileWidth*$this->BytesPerSample;
+                $o1 = $this->TagList[324][$t1] + ($this->TileLength-$expand)*$this->TileWidth*$this->BytesPerSample;
+                if ( $padding[2] ) $o2 = $this->TagList[324][$t2] + ($this->TileLength-$expand)*$this->TileWidth*$this->BytesPerSample;
+                for ( $i=0; $i<$expand; $i++ ) {
+                    if ( isset($o0) ) {
+                        fseek( $this->mGeoTIFF->hFile, $o0 );
+                        $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                        $o0 += $this->TileWidth * $this->BytesPerSample;
+                    }
+                    if ( isset($o1) ) {
+                        fseek( $this->mGeoTIFF->hFile, $o1 );
+                        $buffer .= fread( $this->mGeoTIFF->hFile, $this->TileWidth * $this->BytesPerSample );
+                        $o1 += $this->TileWidth * $this->BytesPerSample;
+                    }
+                    if ( isset($o2) ) {
+                        fseek( $this->mGeoTIFF->hFile, $o2 );
+                        $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                        $o2 += $this->TileWidth * $this->BytesPerSample;
+                    }
+                }
+                if ( $GLOBALS['dev'] ) echo 'fread, buffer: '.strlen($buffer).', mem: '.memory_get_usage().PHP_EOL;
             }
-            if ( $GLOBALS['dev'] ) echo 'fread, buffer: '.strlen($buffer).', mem: '.memory_get_usage().PHP_EOL;
             
             $t0 = $this->TileIndex - 1;
             $t1 = $t0 + 1;
             $t2 = $t0 + 2;
-            $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$expand)*$this->BytesPerSample;
+            unset( $o0 );
+            unset( $o1 );
+            unset( $o2 );
+            if ( $padding[0] ) $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$expand)*$this->BytesPerSample;
             $o1 = $this->TagList[324][$t1];
-            $o2 = $this->TagList[324][$t2];
+            if ( $padding[2] ) $o2 = $this->TagList[324][$t2];
             for ( $i=0; $i<$this->TileLength; $i++ ) {
-                fseek( $this->mGeoTIFF->hFile, $o0 );
-                $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
-                fseek( $this->mGeoTIFF->hFile, $o1 );
-                $buffer .= fread( $this->mGeoTIFF->hFile, $this->TileWidth * $this->BytesPerSample );
-                fseek( $this->mGeoTIFF->hFile, $o2 );
-                $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
-                $o0 += $this->TileWidth * $this->BytesPerSample;
-                $o1 += $this->TileWidth * $this->BytesPerSample;
-                $o2 += $this->TileWidth * $this->BytesPerSample;
+                if ( isset($o0) ) {
+                    fseek( $this->mGeoTIFF->hFile, $o0 );
+                    $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                    $o0 += $this->TileWidth * $this->BytesPerSample;
+                }
+                if ( isset($o1) ) {
+                    fseek( $this->mGeoTIFF->hFile, $o1 );
+                    $buffer .= fread( $this->mGeoTIFF->hFile, $this->TileWidth * $this->BytesPerSample );
+                    $o1 += $this->TileWidth * $this->BytesPerSample;
+                }
+                if ( isset($o2) ) {
+                    fseek( $this->mGeoTIFF->hFile, $o2 );
+                    $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                    $o2 += $this->TileWidth * $this->BytesPerSample;
+                }
             }
             if ( $GLOBALS['dev'] ) echo 'fread, buffer: '.strlen($buffer).', mem: '.memory_get_usage().PHP_EOL;
 
-            $t0 = $this->TileIndex - 1 + $this->TileColumnNum;
-            $t1 = $t0 + 1;
-            $t2 = $t0 + 2;
-            $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$expand)*$this->BytesPerSample;
-            $o1 = $this->TagList[324][$t1];
-            $o2 = $this->TagList[324][$t2];
-            for ( $i=0; $i<$expand; $i++ ) {
-                fseek( $this->mGeoTIFF->hFile, $o0 );
-                $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
-                fseek( $this->mGeoTIFF->hFile, $o1 );
-                $buffer .= fread( $this->mGeoTIFF->hFile, $this->TileWidth * $this->BytesPerSample );
-                fseek( $this->mGeoTIFF->hFile, $o2 );
-                $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
-                $o0 += $this->TileWidth * $this->BytesPerSample;
-                $o1 += $this->TileWidth * $this->BytesPerSample;
-                $o2 += $this->TileWidth * $this->BytesPerSample;
+            if ( $padding[3] ) {
+                $t0 = $this->TileIndex - 1 + $this->TileColumnNum;
+                $t1 = $t0 + 1;
+                $t2 = $t0 + 2;
+                unset( $o0 );
+                unset( $o1 );
+                unset( $o2 );
+                if ( $padding[0] ) $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$expand)*$this->BytesPerSample;
+                $o1 = $this->TagList[324][$t1];
+                if ( $padding[2] ) $o2 = $this->TagList[324][$t2];
+                for ( $i=0; $i<$expand; $i++ ) {
+                    if ( isset($o0) ) {
+                        fseek( $this->mGeoTIFF->hFile, $o0 );
+                        $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                        $o0 += $this->TileWidth * $this->BytesPerSample;
+                    }
+                    if ( isset($o1) ) {
+                        fseek( $this->mGeoTIFF->hFile, $o1 );
+                        $buffer .= fread( $this->mGeoTIFF->hFile, $this->TileWidth * $this->BytesPerSample );
+                        $o1 += $this->TileWidth * $this->BytesPerSample;
+                    }
+                    if ( isset($o2) ) {
+                        fseek( $this->mGeoTIFF->hFile, $o2 );
+                        $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                        $o2 += $this->TileWidth * $this->BytesPerSample;
+                    }
+                }
+                if ( $GLOBALS['dev'] ) echo 'fread, buffer: '.strlen($buffer).', mem: '.memory_get_usage().PHP_EOL;
             }
-            if ( $GLOBALS['dev'] ) echo 'fread, buffer: '.strlen($buffer).', mem: '.memory_get_usage().PHP_EOL;
             
             // unpack 
             $bitmap->mBitmap = SplFixedArray::fromArray( unpack( $this->mUnpackFormats[$this->BytesPerSample], $buffer ), false ); /* This must be done with one line or extra memory is allocated */
@@ -614,7 +672,7 @@ class ImageFileDirectory {
                 */
             }            
             
-            $bitmap->trim($expand);
+            $bitmap->trim( $padding );
 
             // Cache raster as PHP array
             file_put_contents( $cache_filename, gzcompress(serialize($bitmap)) );
@@ -1026,6 +1084,8 @@ class GeoTIFF {
                 $this->IFDList[$ifdoffset]->TileRowNum = intdiv($this->IFDList[$ifdoffset]->ImageLength - 1, $this->IFDList[$ifdoffset]->TileLength) + 1;
                 $this->IFDList[$ifdoffset]->TileBytesPerRow = $this->IFDList[$ifdoffset]->TileWidth * $this->IFDList[$ifdoffset]->BytesPerSample;
                 
+                $this->IFDList[$ifdoffset]->TileCount = $this->IFDList[$ifdoffset]->TileRowNum * $this->IFDList[$ifdoffset]->TileColumnNum;
+                
                 $ifdoffset = current(unpack( $this->mUnpackFormats[1], fread( $this->hFile, 4 ) )); /* Offset to next IFD  */
                 //echo 'next: '.$ifdoffset.PHP_EOL;
             } else {
@@ -1135,6 +1195,8 @@ if ( $geotiff->open( __DIR__.DIRECTORY_SEPARATOR.'twdtm_asterV2_30m.tif' ) ) {
     $ifd = $geotiff->getCurrentIFD();
     if ( $action==='gettile' ) {
         if ( $ifd->setTileIndex( $point ) ) {
+            //$ifd->resetTileIndex();
+            //$ifd->nextTile();
             $ifd->getTile( $filter );
         }
     } else if ( $action==='convert' ) {
