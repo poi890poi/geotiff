@@ -3,6 +3,7 @@
 //http://www.fileformat.info/format/tiff/egff.htm
 //https://www.loc.gov/preservation/digital/formats/content/tiff_tags.shtml
 
+set_time_limit(0);
 
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
@@ -263,7 +264,9 @@ class ImageFileDirectory {
     public $TileColumnNum;
     public $TileRowNum;
     public $TileBytesPerRow;
-    public $TileIndex; /* current index of tile in this IFD */
+    public $TileIndex; /* index of active tile in this IFD */
+    public $TileX; /* X of active tile in this IFD */
+    public $TileY; /* Y of active tile in this IFD */
     public $PixelPointer; /* current pixel offset */
     
     public $GeographicTypeGeoKey; /* This key may be used to specify the code for the geographic coordinate system used to map lat-long to a specific ellipsoid over the earth. */
@@ -416,35 +419,57 @@ class ImageFileDirectory {
         }
         $dstRaster->fromSplFixedRaster( $buffer );
     }
+    
+    public function resetTileIndex() {
+        $this->TileIndex = -1;
+        $this->TileX = -1;
+        $this->TileY = 0;
+    }
 
-    public function getTileIndex( &$point ) {
+    public function nextTile() {
+        $this->TileIndex++;
+        if ( $this->TileIndex >= $this->TileRowNum * $this->TileColumnNum ) {
+            return 0;
+        }
+        $this->TileX++;
+        if ( $this->TileX >= $this->TileColumnNum ) {
+            $this->TileX = 0;
+            $this->TileY++;
+        }
+        return 1;
+    }
+
+    public function setTileIndex( &$point ) {
+        /* Get TIFF Tile where the point is in */
         if ( $point->mFormat===$this->GeographicTypeGeoKey ) {
             $mx = (int)( $this->ModelTiepointTag[0] + ($point->lon - $this->ModelTiepointTag[3]) / $this->ModelPixelScaleTag[0] ); /* pixel x in whole map */
             $my = (int)( $this->ModelTiepointTag[1] + ($point->lat - $this->ModelTiepointTag[4]) / $this->ModelPixelScaleTag[1] ); /* pixel y in whole map */
-            $tx = intdiv( $mx, $this->TileWidth ); /* tile x */
-            $ty = intdiv( $my, $this->TileLength ); /* tile y */
+            $this->TileX = intdiv( $mx, $this->TileWidth ); /* tile x */
+            $this->TileY = intdiv( $my, $this->TileLength ); /* tile y */
             
-            $index = $tx + $ty * $this->TileColumnNum;
+            $this->TileIndex = $this->TileX + $this->TileY * $this->TileColumnNum;
+            
         } else {
             echo 'Warning! Coordinate system mismatch. point CS: '.$point->mFormat.', map CS: '.$this->GeographicTypeGeoKey.PHP_EOL;
-            return -1;
+            return 0;
         }
 
-        if ( $index < 0 || $index >= $this->TileRowNum * $this->TileColumnNum ) {
+        if ( $this->TileIndex < 0 || $this->TileIndex >= $this->TileRowNum * $this->TileColumnNum ) {
             echo 'Coordinate ('.$point->lon.', '.$point->lat.') out of range'.PHP_EOL;
-            return -1;
+            return 0;
         }
 
         //$this->PixelPointer = $this->TagList[324][$this->TileIndex] + (($mx % $this->TileWidth) + ($my % $this->TileLength) * $this->TileWidth) * $this->BytesPerSample;
         //echo sprintf( 'tile index: %d, offset: %d, bytes: %d'.PHP_EOL, $this->TileIndex, $this->TagList[324][$this->TileIndex], $this->TagList[325][$this->TileIndex] );
-
-        return $index;
+        
+        return 1;
     }
 
-    public function getTile( $tile_index, $filter, $format='png' ) {
-        /* Get TIFF Tile where the point is in */
-        $this->TileIndex = $tile_index;
+    public function getTileIndex() {
+        return array( $this->TileIndex, $this->TileX, $this->TileY );
+    }
 
+    public function getTile( $filter, $format='png' ) {
         // Cache raster as PHP array
         $cache_filename = md5( $this->TileIndex.'::'.$filter );
         $cache_dir = './cache/'.substr($cache_filename, 0, 2).'/'.substr($cache_filename, 2, 2);
@@ -464,11 +489,11 @@ class ImageFileDirectory {
             
             $now = microtime(true) * 1000;
             
-            $expand = 16; /* expand for convolution */
+            $expand = 8; /* expand for convolution */
             $bitmap = new SplFixedRaster( $this->TileWidth + $expand * 2, $this->TileLength + $expand * 2 );
             $bitmap->setRange(
-                $this->ModelTiepointTag[3] + $tx*$this->TileWidth*$this->ModelPixelScaleTag[0] - $expand*$this->ModelPixelScaleTag[0],
-                $this->ModelTiepointTag[4] + $ty*$this->TileLength*$this->ModelPixelScaleTag[1] - $expand*$this->ModelPixelScaleTag[1],
+                $this->ModelTiepointTag[3] + $this->TileX*$this->TileWidth*$this->ModelPixelScaleTag[0] - $expand*$this->ModelPixelScaleTag[0],
+                $this->ModelTiepointTag[4] + $this->TileY*$this->TileLength*$this->ModelPixelScaleTag[1] - $expand*$this->ModelPixelScaleTag[1],
                 $this->ModelPixelScaleTag[0],
                 $this->ModelPixelScaleTag[1]
             );
@@ -599,7 +624,7 @@ class ImageFileDirectory {
         if ( $filter==='sobel' ) {
             // Composite planar data cannot be normalied 
         } else if ( $filter==='' ) {
-            $bitmap->normalize( $stats, $mGeoTIFF->AltitudeMin, $mGeoTIFF->AltitudeMax );
+            $bitmap->normalize( $stats, $this->mGeoTIFF->AltitudeMin, $this->mGeoTIFF->AltitudeMax );
         } else {
             $stats = array();
             $bitmap->normalize( $stats );
@@ -1030,16 +1055,6 @@ class GeoTIFF {
         return current($this->IFDList);
     }
     
-    public function getTileIndex( &$point ) {
-        $ifd = $this->getCurrentIFD();
-        return $ifd->getTileIndex( $point );
-    }
-
-    public function getTile( $tile_index, $filter, $format='png' ) {
-        $ifd = $this->getCurrentIFD();
-        $ifd->getTile( $tile_index, $filter, $format );
-    }
-
     public function info() {
         $info = array();
         foreach ( $this->IFDList as $ifd ) {
@@ -1053,15 +1068,15 @@ class GeoTIFF {
         $AltitudeMax = $alt_max;
     }
 
-    public function botCrawl( $tile_index ) {
+    public function botCrawl( &$tile_index ) {
         $ifd = $this->getCurrentIFD();
-        $img = $ifd->getTile( $tile_index, 'sobel', 'resource' );
+        $img = $ifd->getTile( 'sobel', 'resource' );
 
         /* Hiking simulation */
         $now = microtime(true);
         $width = imagesx( $img );
         $height = imagesy( $img );
-        $bots = 10000;
+        $bots = 5000;
         while ( $bots > 0 ) {
             srand((double) microtime() * 1000000); 
             $x = rand( 0, $width - 1 );
@@ -1115,20 +1130,39 @@ if ( $geotiff->open( __DIR__.DIRECTORY_SEPARATOR.'twdtm_asterV2_30m.tif' ) ) {
     //$point = new GeoPoint( 23.90165,121.32335 ); // Mt. Pinnacle 2313
     //$point = new GeoPoint( 24.48084,121.47884 );
 
+    $geotiff->setAltitudeRange( 0, 4000 ); // For Taiwan, which has a maximum altitude of 3952
+    
+    $ifd = $geotiff->getCurrentIFD();
     if ( $action==='gettile' ) {
-        $geotiff->setAltitudeRange( 0, 4000 );
-        $index = $geotiff->getTileIndex( $point );
-        $geotiff->getTile( $index, $filter );
+        if ( $ifd->setTileIndex( $point ) ) {
+            $ifd->getTile( $filter );
+        }
     } else if ( $action==='convert' ) {
-        $geotiff->setAltitudeRange( 0, 4000 );
-        $img = $geotiff->getTile( $point, '', 'resource' );
-        $tile_dir = './cache/tiles';
-        $tile_filename = $cache_dir.'/'.$cache_filename;
-        @mkdir( $tile_dir, 0777, true );
-        //file_put_contents
-        imagedestroy( $img );
+        $ifd->resetTileIndex();
+        while ( $ifd->nextTile() ) {
+            $index = $ifd->getTileIndex();
+            $img = $ifd->getTile( '', 'resource' );
+            if ( strlen($filter) ) {
+                $tile_dir = './tiles/sobel';
+            } else {
+                $tile_dir = './tiles/clean';
+            }
+            $tile_filename = $tile_dir.'/tile_'.$index[0].'.png';
+            echo 'tile '.$index[0].' ( '.$index[1].', '.$index[2].' )';
+            if ( !file_exists($tile_filename) ) {
+                @mkdir( $tile_dir, 0777, true );
+                imagepng( $img, $tile_filename );
+                imagedestroy( $img );
+                echo ' converted'.PHP_EOL;
+            } else {
+                echo ' already exists'.PHP_EOL;
+            }
+        }
+        //montage tile_*.png -tile 29x36 -geometry 512x512+0+0 merged_%d.png
     } else if ( $action==='crawl' ) {
-        $geotiff->botCrawl( $point );
+        if ( $ifd->setTileIndex( $point ) ) {
+            $ifd->botCrawl( $index );
+        }
     } else {
         echo json_encode( $geotiff->info() );
     }
