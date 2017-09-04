@@ -9,14 +9,24 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
+if ( isset($argv) ) {
+    foreach ( $argv as $arg ) {
+        $e = explode( '=', $arg );
+        if ( count($e)===2 )
+            $_GET[$e[0]] = $e[1];
+        else    
+            $_GET[$e[0]] = 0;
+    }
+}
+
 $dev = 0;
 $action = '';
 $reset = 0;
-$filter = 0;
+$filter = '';
 if ( isset($_GET['dev']) ) $dev = intval( $_GET['dev'] );
 if ( isset($_GET['action']) ) $action = $_GET['action'];
 if ( isset($_GET['reset']) ) $reset = intval( $_GET['reset'] );
-if ( isset($_GET['filter']) ) $filter = $_GET['filter'];
+if ( isset($_GET['filter']) ) $filter = trim($_GET['filter']);
 if ( $dev > 0 ) {
     header('Content-Type: application/json; charset=utf-8');
     echo 'DEV'.PHP_EOL;
@@ -176,6 +186,18 @@ class SplFixedRaster extends SplFixedArray {
     }
     
     public function normalize( &$stats, $type = 'dynamic', $min = -500, $max = 500 ) {
+        if ( $GLOBALS['dev'] ) {
+            echo 'normalize()'.PHP_EOL;
+            echo 'length: '.$this->mLength.PHP_EOL;
+            echo 'bitmap: '.count($this->mBitmap).PHP_EOL;
+        }
+        if ( count($this->mBitmap)===0 ) {
+            echo 'bitmap is empty'.PHP_EOL;
+            print_r( $this[0] );
+            die();
+            //print_r( error_get_last() );
+        }
+        
         if ( $type==='static' ) {
         } else {
             $min = 65536 * 65536;
@@ -184,10 +206,15 @@ class SplFixedRaster extends SplFixedArray {
                 if ( $value > $max ) $max = $value;
                 if ( $value < $min ) $min = $value;
             }
-            header('G4H-RasterMaxValue: '.$max);
-            header('G4H-RasterMinValue: '.$min);
+            @header('G4H-RasterMaxValue: '.$max);
+            @header('G4H-RasterMinValue: '.$min);
         }
-        $multiplier = 255.0 / ($max-$min);
+        
+        if ( $max===$min ) {
+            $multiplier = 1;
+        } else {
+            $multiplier = 255.0 / ($max-$min);
+        }
         
         $quantization = 64;
         $qdivisor = intdiv(256, $quantization);
@@ -195,7 +222,7 @@ class SplFixedRaster extends SplFixedArray {
         for ( $i=0; $i<$quantization; $i++ ) {
             $histogram[$i] = 0;
         }
-        
+
         for ( $i=0; $i<$this->mLength; $i++ ) {
             $v = intval( ($this->mBitmap[$i]-$min) * $multiplier );
             if ( $v > 255 ) $v = 255;
@@ -481,12 +508,27 @@ class ImageFileDirectory {
         $cache_filename = $cache_dir.'/'.$cache_filename;
         @mkdir( $cache_dir, 0777, true );
         
-        header('G4H-Reset: '.$GLOBALS['reset']);
+        @header( 'G4H-Reset: '.$GLOBALS['reset'] );
+        @header( 'G4H-Filter: '.$filter );
+        @header( 'G4H-Format: '.$format );
 
         if ( !$GLOBALS['reset'] && file_exists($cache_filename) ) {
-            header('G4H-CachePath: '.$cache_filename);
-            header('G4H-CacheSize: '.filesize($cache_filename));
+            @header('G4H-CachePath: '.$cache_filename);
+            @header('G4H-CacheSize: '.filesize($cache_filename));
+            /*
             $bitmap = unserialize(gzuncompress(file_get_contents( $cache_filename )));
+            if ( $bitmap===FALSE ) {
+                print_r( error_get_last() );
+            }
+            */
+            $bitmap = new SplFixedRaster( $this->TileWidth, $this->TileLength );
+            $bitmap->setRange(
+                $this->ModelTiepointTag[3] + $this->TileX*$this->TileWidth*$this->ModelPixelScaleTag[0],
+                $this->ModelTiepointTag[4] + $this->TileY*$this->TileLength*$this->ModelPixelScaleTag[1],
+                $this->ModelPixelScaleTag[0],
+                $this->ModelPixelScaleTag[1]
+            );
+            $bitmap->mBitmap = unserialize(gzuncompress(file_get_contents( $cache_filename )));
         } else {
             $count = 0;
             $mean = 0.0;
@@ -494,37 +536,34 @@ class ImageFileDirectory {
             
             $now = microtime(true) * 1000;
             
-            $expand = 0; /* expand for convolution */
+            $expand = 8; /* expand for convolution */
             $padding = array( $expand, $expand, $expand, $expand );
             if ( $this->TileX===0 ) {
-                $tp_shift_x = 0;
                 $padding[0] = 0;
-            } else {
-                $tp_shift_x = -$expand*$this->ModelPixelScaleTag[0];
-                if ( $this->TileX===$this->TileColumnNum ) {
-                    $padding[2] = 0;
-                }
+            } else if ( $this->TileX===$this->TileColumnNum-1 ) {
+                $padding[2] = 0;
             }
             if ( $this->TileY===0 ) {
-                $tp_shift_y = 0;
                 $padding[1] = 0;
-            } else {
-                $tp_shift_y = -$expand*$this->ModelPixelScaleTag[1];
-                if ( $this->TileY===$this->TileRowNum ) {
-                    $padding[3] = 0;
-                }
+            } else if ( $this->TileY===$this->TileRowNum-1 ) {
+                $padding[3] = 0;
             }
             $bitmap = new SplFixedRaster( $this->TileWidth + $padding[0] + $padding[2],
                 $this->TileLength + $padding[1] + $padding[3] );
 
             $bitmap->setRange(
-                $this->ModelTiepointTag[3] + $this->TileX*$this->TileWidth*$this->ModelPixelScaleTag[0] + $tp_shift_x,
-                $this->ModelTiepointTag[4] + $this->TileY*$this->TileLength*$this->ModelPixelScaleTag[1] + $tp_shift_y,
+                $this->ModelTiepointTag[3] + $this->TileX*$this->TileWidth*$this->ModelPixelScaleTag[0] - $padding[0]*$this->ModelPixelScaleTag[0],
+                $this->ModelTiepointTag[4] + $this->TileY*$this->TileLength*$this->ModelPixelScaleTag[1] - $padding[1]*$this->ModelPixelScaleTag[1],
                 $this->ModelPixelScaleTag[0],
                 $this->ModelPixelScaleTag[1]
             );
             
-            if ( $GLOBALS['dev'] ) echo 'pixels: '.$bitmap->getSize().', mem: '.memory_get_usage().PHP_EOL;
+            if ( $GLOBALS['dev'] ) {
+                echo 'pixels: '.$bitmap->getSize().', mem: '.memory_get_usage().PHP_EOL;
+                printf( '%d (%d, %d) in %dx%d'.PHP_EOL, $this->TileIndex, $this->TileX, $this->TileY, $this->TileColumnNum, $this->TileRowNum );
+                print_r( $padding );
+                //print_r( $this->TagList[324] );
+            }
             
             $buffer = '';
 
@@ -535,13 +574,13 @@ class ImageFileDirectory {
                 unset( $o0 );
                 unset( $o1 );
                 unset( $o2 );
-                if ( $padding[0] ) $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$expand)*$this->BytesPerSample + ($this->TileLength-$expand)*$this->TileWidth*$this->BytesPerSample;
-                $o1 = $this->TagList[324][$t1] + ($this->TileLength-$expand)*$this->TileWidth*$this->BytesPerSample;
-                if ( $padding[2] ) $o2 = $this->TagList[324][$t2] + ($this->TileLength-$expand)*$this->TileWidth*$this->BytesPerSample;
-                for ( $i=0; $i<$expand; $i++ ) {
+                if ( $padding[0] ) $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$padding[0])*$this->BytesPerSample + ($this->TileLength-$padding[1])*$this->TileWidth*$this->BytesPerSample;
+                $o1 = $this->TagList[324][$t1] + ($this->TileLength-$padding[1])*$this->TileWidth*$this->BytesPerSample;
+                if ( $padding[2] ) $o2 = $this->TagList[324][$t2] + ($this->TileLength-$padding[1])*$this->TileWidth*$this->BytesPerSample;
+                for ( $i=0; $i<$padding[1]; $i++ ) {
                     if ( isset($o0) ) {
                         fseek( $this->mGeoTIFF->hFile, $o0 );
-                        $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                        $buffer .= fread( $this->mGeoTIFF->hFile, $padding[0] * $this->BytesPerSample );
                         $o0 += $this->TileWidth * $this->BytesPerSample;
                     }
                     if ( isset($o1) ) {
@@ -551,7 +590,7 @@ class ImageFileDirectory {
                     }
                     if ( isset($o2) ) {
                         fseek( $this->mGeoTIFF->hFile, $o2 );
-                        $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                        $buffer .= fread( $this->mGeoTIFF->hFile, $padding[2] * $this->BytesPerSample );
                         $o2 += $this->TileWidth * $this->BytesPerSample;
                     }
                 }
@@ -564,13 +603,13 @@ class ImageFileDirectory {
             unset( $o0 );
             unset( $o1 );
             unset( $o2 );
-            if ( $padding[0] ) $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$expand)*$this->BytesPerSample;
+            if ( $padding[0] ) $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$padding[0])*$this->BytesPerSample;
             $o1 = $this->TagList[324][$t1];
             if ( $padding[2] ) $o2 = $this->TagList[324][$t2];
             for ( $i=0; $i<$this->TileLength; $i++ ) {
                 if ( isset($o0) ) {
                     fseek( $this->mGeoTIFF->hFile, $o0 );
-                    $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                    $buffer .= fread( $this->mGeoTIFF->hFile, $padding[0] * $this->BytesPerSample );
                     $o0 += $this->TileWidth * $this->BytesPerSample;
                 }
                 if ( isset($o1) ) {
@@ -580,7 +619,7 @@ class ImageFileDirectory {
                 }
                 if ( isset($o2) ) {
                     fseek( $this->mGeoTIFF->hFile, $o2 );
-                    $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                    $buffer .= fread( $this->mGeoTIFF->hFile, $padding[2] * $this->BytesPerSample );
                     $o2 += $this->TileWidth * $this->BytesPerSample;
                 }
             }
@@ -593,13 +632,13 @@ class ImageFileDirectory {
                 unset( $o0 );
                 unset( $o1 );
                 unset( $o2 );
-                if ( $padding[0] ) $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$expand)*$this->BytesPerSample;
+                if ( $padding[0] ) $o0 = $this->TagList[324][$t0] + ($this->TileWidth-$padding[0])*$this->BytesPerSample;
                 $o1 = $this->TagList[324][$t1];
                 if ( $padding[2] ) $o2 = $this->TagList[324][$t2];
-                for ( $i=0; $i<$expand; $i++ ) {
+                for ( $i=0; $i<$padding[3]; $i++ ) {
                     if ( isset($o0) ) {
                         fseek( $this->mGeoTIFF->hFile, $o0 );
-                        $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                        $buffer .= fread( $this->mGeoTIFF->hFile, $padding[0] * $this->BytesPerSample );
                         $o0 += $this->TileWidth * $this->BytesPerSample;
                     }
                     if ( isset($o1) ) {
@@ -609,7 +648,7 @@ class ImageFileDirectory {
                     }
                     if ( isset($o2) ) {
                         fseek( $this->mGeoTIFF->hFile, $o2 );
-                        $buffer .= fread( $this->mGeoTIFF->hFile, $expand * $this->BytesPerSample );
+                        $buffer .= fread( $this->mGeoTIFF->hFile, $padding[2] * $this->BytesPerSample );
                         $o2 += $this->TileWidth * $this->BytesPerSample;
                     }
                 }
@@ -675,10 +714,17 @@ class ImageFileDirectory {
             $bitmap->trim( $padding );
 
             // Cache raster as PHP array
-            file_put_contents( $cache_filename, gzcompress(serialize($bitmap)) );
+            file_put_contents( $cache_filename, gzcompress(serialize($bitmap->mBitmap)) );
         }
         
         /* find max and min for value scaling */
+        if ( $GLOBALS['dev'] ) {
+            echo 'bitmap: '.count($bitmap->mBitmap).PHP_EOL;
+            echo 'length: '.$bitmap->mLength.PHP_EOL;
+            $bitmap->mLength = 6789;
+            echo 'filter: '.$filter.PHP_EOL;
+            //print_r( $bitmap );
+        }
         if ( $filter==='sobel' ) {
             // Composite planar data cannot be normalied 
         } else if ( $filter==='' ) {
@@ -689,8 +735,16 @@ class ImageFileDirectory {
             $threshold_high = $stats['threshold'][0];
             $threshold_low = $stats['threshold'][1];
         }
+        if ( $GLOBALS['dev'] ) {
+            echo 'after normalize'.PHP_EOL;
+            echo 'bitmap: '.count($bitmap->mBitmap).PHP_EOL;
+            echo 'length: '.$bitmap->mLength.PHP_EOL;
+            $bitmap->mLength = 6789;
+            echo 'filter: '.$filter.PHP_EOL;
+            //print_r( $bitmap );
+        }
 
-        //echo 'bitmap: '.count($bitmap).PHP_EOL;
+        //echo 'bitmap: '.count($bitmap->mBitmap).PHP_EOL;
         $img = imagecreatetruecolor( $bitmap->mWidth, $bitmap->mHeight );
         if ( is_resource($img) ) {
             $index = 0;
@@ -714,18 +768,41 @@ class ImageFileDirectory {
                 }
             }
 
-            if ( $GLOBALS['dev'] ) {
-                imagedestroy( $img );
-                die();
-            } else {
-                if ( $format==='png' ) {
-                    header('Content-Type: image/png');
-                    imagepng( $img );
-                } else {
-                    return $img;
+            //if ( !imagestring ( $img, 1, 128, 128, sprintf( '%04d', $this->TileIndex ), imagecolorallocate($img, 0, 0, 0) ) ) {
+            $fontfile = './Roboto_Mono/RobotoMono-Bold.ttf';
+            $text = sprintf( '%04d', $this->TileIndex );
+            $fsize = 128;
+            $black = imagecolorallocatealpha ($img, 0, 0, 0, 64);
+            $white = imagecolorallocatealpha ($img, 255, 255, 255, 64);
+            $bbox = imagettfbbox( $fsize, 0, $fontfile, $text );
+            if ( $bbox ) {
+                if ( !imagettftext( $img, $fsize, 0,
+                    intdiv( $bitmap->mWidth - ($bbox[2]-$bbox[0]), 2 ),
+                    intdiv( $bitmap->mHeight, 2 ) + intdiv( $bbox[1]-$bbox[7], 2 ),
+                    $white, $fontfile, $text ) )
+                {
+                    print_r( error_get_last() );
                 }
             }
+            
+            if ( $GLOBALS['dev'] ) {
+                echo $format.PHP_EOL;
+            }
+            if ( $format==='png' ) {
+                if ( $GLOBALS['dev'] ) {
+                    imagedestroy( $img );
+                    die();
+                } else {
+                    header('Content-Type: image/png');
+                    imagepng( $img );
+                }
+            } else {
+                return $img;
+            }
+
             imagedestroy( $img );
+        } else {
+            print_r( error_get_last() );
         }
 
         if ( $GLOBALS['dev'] ) {
@@ -1191,26 +1268,38 @@ if ( $geotiff->open( __DIR__.DIRECTORY_SEPARATOR.'twdtm_asterV2_30m.tif' ) ) {
     //$point = new GeoPoint( 24.48084,121.47884 );
 
     $geotiff->setAltitudeRange( 0, 4000 ); // For Taiwan, which has a maximum altitude of 3952
+
+    if ( $dev ) echo $action.PHP_EOL;
     
     $ifd = $geotiff->getCurrentIFD();
     if ( $action==='gettile' ) {
         if ( $ifd->setTileIndex( $point ) ) {
             //$ifd->resetTileIndex();
-            //$ifd->nextTile();
+            //for ( $i=0; $i<1042; $i++ ) $ifd->nextTile();
+            //for ( $i=0; $i<40; $i++ ) $ifd->nextTile();
+            if ( $dev ) {
+                $index = $ifd->getTileIndex();
+                echo sprintf( '%04d', $index ).PHP_EOL;
+            }
             $ifd->getTile( $filter );
         }
     } else if ( $action==='convert' ) {
+        echo $action.PHP_EOL;
+        echo $filter.PHP_EOL;
         $ifd->resetTileIndex();
         while ( $ifd->nextTile() ) {
             $index = $ifd->getTileIndex();
+            $seq = sprintf( '%04d', $index[0] );
+            echo 'tile '.$seq.' ( '.$index[1].', '.$index[2].' )'.PHP_EOL;
+            
             $img = $ifd->getTile( '', 'resource' );
+            if ($dev) print_r( $img );
             if ( strlen($filter) ) {
-                $tile_dir = './tiles/sobel';
+                $tile_dir = './tiles/'.$filter;
             } else {
-                $tile_dir = './tiles/clean';
+                $tile_dir = './tiles/base';
             }
-            $tile_filename = $tile_dir.'/tile_'.$index[0].'.png';
-            echo 'tile '.$index[0].' ( '.$index[1].', '.$index[2].' )';
+            $tile_filename = $tile_dir.'/tile_'.$seq.'.png';
             if ( !file_exists($tile_filename) ) {
                 @mkdir( $tile_dir, 0777, true );
                 imagepng( $img, $tile_filename );
@@ -1220,6 +1309,7 @@ if ( $geotiff->open( __DIR__.DIRECTORY_SEPARATOR.'twdtm_asterV2_30m.tif' ) ) {
                 echo ' already exists'.PHP_EOL;
             }
         }
+        echo 'EOF'.PHP_EOL;
         //montage tile_*.png -tile 29x36 -geometry 512x512+0+0 merged_%d.png
     } else if ( $action==='crawl' ) {
         if ( $ifd->setTileIndex( $point ) ) {
