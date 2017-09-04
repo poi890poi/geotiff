@@ -146,10 +146,12 @@ class SplFixedRaster extends SplFixedArray {
         $this->mTiepoint[1] = $tpy;
         $this->mPixelScale[0] = $psx;
         $this->mPixelScale[1] = $psy;
+        /*
         if ( $GLOBALS['dev'] ) {
             echo $this->mTiepoint[1].','.$this->mTiepoint[0].PHP_EOL;
             echo ($this->mTiepoint[1] + $this->mHeight * $this->mPixelScale[1]).','.($this->mTiepoint[0] + $this->mWidth * $this->mPixelScale[0]).PHP_EOL;
         }
+        */
     }
     
     public function setValue( $x, $y, $v ) {
@@ -186,11 +188,13 @@ class SplFixedRaster extends SplFixedArray {
     }
     
     public function normalize( &$stats, $type = 'dynamic', $min = -500, $max = 500 ) {
+        /*
         if ( $GLOBALS['dev'] ) {
             echo 'normalize()'.PHP_EOL;
             echo 'length: '.$this->mLength.PHP_EOL;
             echo 'bitmap: '.count($this->mBitmap).PHP_EOL;
         }
+        */
         if ( count($this->mBitmap)===0 ) {
             echo 'bitmap is empty'.PHP_EOL;
             print_r( $this[0] );
@@ -714,10 +718,11 @@ class ImageFileDirectory {
             $bitmap->trim( $padding );
 
             // Cache raster as PHP array
-            file_put_contents( $cache_filename, gzcompress(serialize($bitmap->mBitmap)) );
+            @file_put_contents( $cache_filename, gzcompress(serialize($bitmap->mBitmap)) );
         }
         
         /* find max and min for value scaling */
+        /*
         if ( $GLOBALS['dev'] ) {
             echo 'bitmap: '.count($bitmap->mBitmap).PHP_EOL;
             echo 'length: '.$bitmap->mLength.PHP_EOL;
@@ -725,6 +730,7 @@ class ImageFileDirectory {
             echo 'filter: '.$filter.PHP_EOL;
             //print_r( $bitmap );
         }
+        */
         if ( $filter==='sobel' ) {
             // Composite planar data cannot be normalied 
         } else if ( $filter==='' ) {
@@ -735,15 +741,6 @@ class ImageFileDirectory {
             $threshold_high = $stats['threshold'][0];
             $threshold_low = $stats['threshold'][1];
         }
-        if ( $GLOBALS['dev'] ) {
-            echo 'after normalize'.PHP_EOL;
-            echo 'bitmap: '.count($bitmap->mBitmap).PHP_EOL;
-            echo 'length: '.$bitmap->mLength.PHP_EOL;
-            $bitmap->mLength = 6789;
-            echo 'filter: '.$filter.PHP_EOL;
-            //print_r( $bitmap );
-        }
-
         //echo 'bitmap: '.count($bitmap->mBitmap).PHP_EOL;
         $img = imagecreatetruecolor( $bitmap->mWidth, $bitmap->mHeight );
         if ( is_resource($img) ) {
@@ -1292,15 +1289,16 @@ if ( $geotiff->open( __DIR__.DIRECTORY_SEPARATOR.'twdtm_asterV2_30m.tif' ) ) {
             $seq = sprintf( '%04d', $index[0] );
             echo 'tile '.$seq.' ( '.$index[1].', '.$index[2].' )'.PHP_EOL;
             
-            $img = $ifd->getTile( '', 'resource' );
-            if ($dev) print_r( $img );
             if ( strlen($filter) ) {
                 $tile_dir = './tiles/'.$filter;
             } else {
                 $tile_dir = './tiles/base';
             }
             $tile_filename = $tile_dir.'/tile_'.$seq.'.png';
+            
             if ( !file_exists($tile_filename) ) {
+                $img = $ifd->getTile( '', 'resource' );
+                if ($dev) print_r( $img );
                 @mkdir( $tile_dir, 0777, true );
                 imagepng( $img, $tile_filename );
                 imagedestroy( $img );
