@@ -510,6 +510,7 @@ class ImageFileDirectory {
         $cache_dir = './cache/'.substr($cache_filename, 0, 2).'/'.substr($cache_filename, 2, 2);
         $cache_filename = $cache_dir.'/'.$cache_filename;
         @mkdir( $cache_dir, 0777, true );
+        @chmod( $cache_dir, 0777 );
         
         @header( 'G4H-Reset: '.$GLOBALS['reset'] );
         @header( 'G4H-Filter: '.$filter );
@@ -561,12 +562,14 @@ class ImageFileDirectory {
                 $this->ModelPixelScaleTag[1]
             );
             
+            /*
             if ( $GLOBALS['dev'] ) {
                 echo 'pixels: '.$bitmap->getSize().', mem: '.memory_get_usage().PHP_EOL;
                 printf( '%d (%d, %d) in %dx%d'.PHP_EOL, $this->TileIndex, $this->TileX, $this->TileY, $this->TileColumnNum, $this->TileRowNum );
                 print_r( $padding );
                 //print_r( $this->TagList[324] );
             }
+            */
             
             $buffer = '';
 
@@ -597,7 +600,7 @@ class ImageFileDirectory {
                         $o2 += $this->TileWidth * $this->BytesPerSample;
                     }
                 }
-                if ( $GLOBALS['dev'] ) echo 'fread, buffer: '.strlen($buffer).', mem: '.memory_get_usage().PHP_EOL;
+                //if ( $GLOBALS['dev'] ) echo 'fread, buffer: '.strlen($buffer).', mem: '.memory_get_usage().PHP_EOL;
             }
             
             $t0 = $this->TileIndex - 1;
@@ -626,7 +629,7 @@ class ImageFileDirectory {
                     $o2 += $this->TileWidth * $this->BytesPerSample;
                 }
             }
-            if ( $GLOBALS['dev'] ) echo 'fread, buffer: '.strlen($buffer).', mem: '.memory_get_usage().PHP_EOL;
+            //if ( $GLOBALS['dev'] ) echo 'fread, buffer: '.strlen($buffer).', mem: '.memory_get_usage().PHP_EOL;
 
             if ( $padding[3] ) {
                 $t0 = $this->TileIndex - 1 + $this->TileColumnNum;
@@ -655,25 +658,25 @@ class ImageFileDirectory {
                         $o2 += $this->TileWidth * $this->BytesPerSample;
                     }
                 }
-                if ( $GLOBALS['dev'] ) echo 'fread, buffer: '.strlen($buffer).', mem: '.memory_get_usage().PHP_EOL;
+                //if ( $GLOBALS['dev'] ) echo 'fread, buffer: '.strlen($buffer).', mem: '.memory_get_usage().PHP_EOL;
             }
             
             // unpack 
             $bitmap->mBitmap = SplFixedArray::fromArray( unpack( $this->mUnpackFormats[$this->BytesPerSample], $buffer ), false ); /* This must be done with one line or extra memory is allocated */
-            if ( $GLOBALS['dev'] ) echo 'unpacked: '.count($buffer).', mem: '.memory_get_usage().PHP_EOL;
+            //if ( $GLOBALS['dev'] ) echo 'unpacked: '.count($buffer).', mem: '.memory_get_usage().PHP_EOL;
           
             /* apply kernels */
             if ( $filter==='prominence' ) {
                 self::convolution( $bitmap, $bitmap, 'gaussian' );
                 self::convolution( $bitmap, $bitmap, 'prominence' );
             } else if ( $filter==='v-sobel' ) {
-                self::convolution( $bitmap, $bitmap, 'gaussian' );
+                //self::convolution( $bitmap, $bitmap, 'gaussian' );
                 self::convolution( $bitmap, $bitmap, 'v-sobel' );
             } else if ( $filter==='h-sobel' ) {
-                self::convolution( $bitmap, $bitmap, 'gaussian' );
+                //self::convolution( $bitmap, $bitmap, 'gaussian' );
                 self::convolution( $bitmap, $bitmap, 'h-sobel' );
             } else if ( $filter==='sobel' ) {
-                self::convolution( $bitmap, $bitmap, 'gaussian' );
+                //self::convolution( $bitmap, $bitmap, 'gaussian' );
                 $vsobel = new SplFixedRaster( $bitmap->mWidth, $bitmap->mHeight );
                 $vsobel->fromSplFixedRaster( $bitmap, false );
                 self::convolution( $vsobel, $bitmap, 'v-sobel' );
@@ -718,6 +721,7 @@ class ImageFileDirectory {
 
             // Cache raster as PHP array
             @file_put_contents( $cache_filename, gzcompress(serialize($bitmap->mBitmap)) );
+            @chmod( $cache_filename, 0666 );
         }
         
         /* find max and min for value scaling */
@@ -730,7 +734,7 @@ class ImageFileDirectory {
             //print_r( $bitmap );
         }
         */
-        if ( $filter==='sobel' ) {
+        if ( $filter==='sobel' || $filter==='h-sobel' || $filter==='v-sobel' ) {
             // Composite planar data cannot be normalized 
         } else if ( $filter==='' ) {
             //echo 'normalize ('.$this->mGeoTIFF->AltitudeMin.', '.$this->mGeoTIFF->AltitudeMax.')'.PHP_EOL;
@@ -765,28 +769,27 @@ class ImageFileDirectory {
                 }
             }
 
-            //if ( !imagestring ( $img, 1, 128, 128, sprintf( '%04d', $this->TileIndex ), imagecolorallocate($img, 0, 0, 0) ) ) {
-            /*
-            $fontfile = './Roboto_Mono/RobotoMono-Bold.ttf';
-            $text = sprintf( '%04d', $this->TileIndex );
-            $fsize = 128;
-            $black = imagecolorallocatealpha ($img, 0, 0, 0, 64);
-            $white = imagecolorallocatealpha ($img, 255, 255, 255, 64);
-            $bbox = imagettfbbox( $fsize, 0, $fontfile, $text );
-            if ( $bbox ) {
-                if ( !imagettftext( $img, $fsize, 0,
-                    intdiv( $bitmap->mWidth - ($bbox[2]-$bbox[0]), 2 ),
-                    intdiv( $bitmap->mHeight, 2 ) + intdiv( $bbox[1]-$bbox[7], 2 ),
-                    $white, $fontfile, $text ) )
-                {
-                    print_r( error_get_last() );
-                }
-            }
-            */
             
             if ( $GLOBALS['dev'] ) {
-                echo $format.PHP_EOL;
+                //echo $format.PHP_EOL;
+                //if ( !imagestring ( $img, 1, 128, 128, sprintf( '%04d', $this->TileIndex ), imagecolorallocate($img, 0, 0, 0) ) ) {
+                $fontfile = './Roboto_Mono/RobotoMono-Bold.ttf';
+                $text = sprintf( '%04d', $this->TileIndex );
+                $fsize = 128;
+                $black = imagecolorallocatealpha ($img, 0, 0, 0, 64);
+                $white = imagecolorallocatealpha ($img, 255, 255, 255, 64);
+                $bbox = imagettfbbox( $fsize, 0, $fontfile, $text );
+                if ( $bbox ) {
+                    if ( !imagettftext( $img, $fsize, 0,
+                        intdiv( $bitmap->mWidth - ($bbox[2]-$bbox[0]), 2 ),
+                        intdiv( $bitmap->mHeight, 2 ) + intdiv( $bbox[1]-$bbox[7], 2 ),
+                        $white, $fontfile, $text ) )
+                    {
+                        print_r( error_get_last() );
+                    }
+                }
             }
+            
             if ( $format==='png' ) {
                 if ( $GLOBALS['dev'] ) {
                     imagedestroy( $img );
@@ -978,6 +981,7 @@ class GeoTIFF {
     public static function saveToCache( $filename, &$obj ) {
         try {
             @file_put_contents( $filename, gzcompress(serialize($obj)) );
+            @chmod( $filename, 0666 );
         } catch (Exception $e) {
             echo 'Caught exception: ',  $e->getMessage(), PHP_EOL;
         }
@@ -1274,9 +1278,10 @@ if ( $geotiff->open( __DIR__.DIRECTORY_SEPARATOR.'twdtm_asterV2_30m.tif' ) ) {
     $ifd = $geotiff->getCurrentIFD();
     if ( $action==='gettile' ) {
         if ( $ifd->setTileIndex( $point ) ) {
-            //$ifd->resetTileIndex();
+            $ifd->resetTileIndex();
             //for ( $i=0; $i<1042; $i++ ) $ifd->nextTile();
             //for ( $i=0; $i<40; $i++ ) $ifd->nextTile();
+            for ( $i=0; $i<367; $i++ ) $ifd->nextTile();
             if ( $dev ) {
                 $index = $ifd->getTileIndex();
                 echo sprintf( '%04d', $index ).PHP_EOL;
@@ -1300,9 +1305,10 @@ if ( $geotiff->open( __DIR__.DIRECTORY_SEPARATOR.'twdtm_asterV2_30m.tif' ) ) {
             $tile_filename = $tile_dir.'/tile_'.$seq.'.png';
             
             if ( !file_exists($tile_filename) ) {
-                $img = $ifd->getTile( '', 'resource' );
+                $img = $ifd->getTile( $filter, 'resource' );
                 if ($dev) print_r( $img );
                 @mkdir( $tile_dir, 0777, true );
+                @chmod( $tile_dir, 0777 );
                 imagepng( $img, $tile_filename );
                 imagedestroy( $img );
                 echo ' converted'.PHP_EOL;
@@ -1311,7 +1317,8 @@ if ( $geotiff->open( __DIR__.DIRECTORY_SEPARATOR.'twdtm_asterV2_30m.tif' ) ) {
             }
         }
         echo 'EOF'.PHP_EOL;
-        //montage tile_*.png -tile 29x36 -geometry 512x512+0+0 merged_%d.png
+        //php geotiff.php action=convert filter=sobel
+        echo 'montage tile_*.png -tile 29x36 -geometry 512x512+0+0 merged_%d.png'.PHP_EOL;
     } else if ( $action==='crawl' ) {
         if ( $ifd->setTileIndex( $point ) ) {
             $ifd->botCrawl( $index );
