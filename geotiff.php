@@ -188,13 +188,12 @@ class SplFixedRaster extends SplFixedArray {
     }
     
     public function normalize( &$stats, $type = 'dynamic', $min = -500, $max = 500 ) {
-        /*
         if ( $GLOBALS['dev'] ) {
             echo 'normalize()'.PHP_EOL;
-            echo 'length: '.$this->mLength.PHP_EOL;
-            echo 'bitmap: '.count($this->mBitmap).PHP_EOL;
+            //echo 'length: '.$this->mLength.PHP_EOL;
+            //echo 'bitmap: '.count($this->mBitmap).PHP_EOL;
+            echo $min.', '.$max.PHP_EOL;
         }
-        */
         if ( count($this->mBitmap)===0 ) {
             echo 'bitmap is empty'.PHP_EOL;
             print_r( $this[0] );
@@ -732,9 +731,10 @@ class ImageFileDirectory {
         }
         */
         if ( $filter==='sobel' ) {
-            // Composite planar data cannot be normalied 
+            // Composite planar data cannot be normalized 
         } else if ( $filter==='' ) {
-            $bitmap->normalize( $stats, $this->mGeoTIFF->AltitudeMin, $this->mGeoTIFF->AltitudeMax );
+            //echo 'normalize ('.$this->mGeoTIFF->AltitudeMin.', '.$this->mGeoTIFF->AltitudeMax.')'.PHP_EOL;
+            $bitmap->normalize( $stats, 'static', $this->mGeoTIFF->AltitudeMin, $this->mGeoTIFF->AltitudeMax );
         } else {
             $stats = array();
             $bitmap->normalize( $stats );
@@ -766,6 +766,7 @@ class ImageFileDirectory {
             }
 
             //if ( !imagestring ( $img, 1, 128, 128, sprintf( '%04d', $this->TileIndex ), imagecolorallocate($img, 0, 0, 0) ) ) {
+            /*
             $fontfile = './Roboto_Mono/RobotoMono-Bold.ttf';
             $text = sprintf( '%04d', $this->TileIndex );
             $fsize = 128;
@@ -781,6 +782,7 @@ class ImageFileDirectory {
                     print_r( error_get_last() );
                 }
             }
+            */
             
             if ( $GLOBALS['dev'] ) {
                 echo $format.PHP_EOL;
@@ -975,7 +977,7 @@ class GeoTIFF {
 
     public static function saveToCache( $filename, &$obj ) {
         try {
-            file_put_contents( $filename, gzcompress(serialize($obj)) );
+            @file_put_contents( $filename, gzcompress(serialize($obj)) );
         } catch (Exception $e) {
             echo 'Caught exception: ',  $e->getMessage(), PHP_EOL;
         }
@@ -1198,8 +1200,9 @@ class GeoTIFF {
     }
     
     public function setAltitudeRange( $alt_min, $alt_max ) {
-        $AltitudeMin = $alt_min;
-        $AltitudeMax = $alt_max;
+        $this->AltitudeMin = $alt_min;
+        $this->AltitudeMax = $alt_max;
+        if ( $GLOBALS['dev'] ) echo 'setAltitudeRange ('.$this->AltitudeMin.', '.$this->AltitudeMax.')'.PHP_EOL;
     }
 
     public function botCrawl( &$tile_index ) {
